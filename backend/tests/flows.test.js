@@ -10,6 +10,9 @@ import { Payment } from "../models/payment.model.js";
 // Needs a disposable MongoDB database: set MONGO_URI_TEST, for example
 // mongodb://127.0.0.1:27017/showitup_test. Skipped when it is not set.
 const TEST_URI = process.env.MONGO_URI_TEST;
+
+// CI has no .env file; tokens still need a signing secret.
+process.env.JWT_SECRET ||= "test-only-jwt-secret-not-for-production";
 const describeDb = TEST_URI ? describe : describe.skip;
 
 const signupAndLogin = async (email, role) => {
