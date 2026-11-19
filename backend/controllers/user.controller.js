@@ -10,12 +10,15 @@ const SIGNUP_ROLES = ["Attendee", "Organizer"];
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
 
+// In production the frontend and API usually live on different domains, so the
+// cookie must be cross-site (SameSite=None; Secure). Set COOKIE_SECURE=false
+// when serving over plain HTTP from one origin (e.g. the Docker Compose setup).
 const cookieOptions = () => {
-    const isProduction = process.env.NODE_ENV === "production";
+    const secure = process.env.NODE_ENV === "production" && process.env.COOKIE_SECURE !== "false";
     return {
         httpOnly: true,
-        sameSite: isProduction ? "None" : "Lax",
-        secure: isProduction,
+        sameSite: secure ? "None" : "Lax",
+        secure,
     };
 };
 

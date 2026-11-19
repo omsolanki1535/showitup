@@ -1,9 +1,13 @@
+# Artillery load test for the public events listing.
+#   npx artillery run testing/load-test.yml
 config:
-  target: "http://localhost:8000"   # Replace with your backend API URL
+  target: "http://localhost:8000"
   phases:
-    - duration: 60      # run test for 60 seconds
-      arrivalRate: 200  # simulate 200 new users per second
+    - duration: 60
+      arrivalRate: 200
 scenarios:
   - flow:
       - get:
-          url: "/api/events/get-events"   # Example endpoint to test
+          url: "/api/events/get-events"
+      - get:
+          url: "/api/health"

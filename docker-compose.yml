@@ -1,0 +1,49 @@
+# One-command local run of the full stack in demo mode:
+#   docker compose up --build
+#   docker compose exec backend npm run seed
+# Then open http://localhost:8080
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 8000
+      MONGO_URI: mongodb://mongo:27017/showitup
+      JWT_SECRET: ${JWT_SECRET:-local-compose-secret-change-me-0123456789abcdef}
+      CLIENT_URL: http://localhost:8080
+      SERVER_URL: http://localhost:8080
+      COOKIE_SECURE: "false"
+      EMAIL: ${EMAIL:-}
+      PASSWORD: ${PASSWORD:-}
+      RAZORPAY_KEY: ${RAZORPAY_KEY:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_RAZORPAY_KEY: ${RAZORPAY_KEY:-}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  mongo-data:

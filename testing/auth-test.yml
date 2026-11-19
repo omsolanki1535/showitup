@@ -1,42 +1,32 @@
+# Artillery load test: log in with the seeded demo attendee, then browse.
+# Run against a local server started with NODE_ENV=test (rate limiting off),
+# or expect 429 responses once the login rate limit is reached.
+#   cd backend && npm run seed
+#   npx artillery run testing/auth-test.yml
 config:
-  target: "http://localhost:8000"   # change to your deployed URL when testing Render
+  target: "http://localhost:8000"
   phases:
     - duration: 60
-      arrivalRate: 50    # start with 50 users/sec, later try 100–200 for stress
+      arrivalRate: 20
   variables:
-    email: "riteshborse008@gmail.com"
-    password: "ritesh2005"
+    email: "attendee@showitup.demo"
+    password: "Demo@1234"
 
 scenarios:
-  - name: "Login + Fetch Events"
+  - name: "Login + browse events + profile"
     flow:
-      # Step 1: Login and capture JWT
+      # The session cookie is stored per virtual user automatically.
       - post:
           url: "/api/user/login"
           json:
             email: "{{ email }}"
             password: "{{ password }}"
-          capture:
-            - json: "$.token"   # JWT is in { token: "..." }
-              as: "jwt"
-
-      # Step 2: Fetch events using captured JWT
       - get:
           url: "/api/events/get-events"
-          headers:
-            Authorization: "Bearer {{ jwt }}"
-
-      # Step 3: (Optional) Book a seat (uncomment & replace eventId for real test)
-      # - post:
-      #     url: "/api/bookings"
-      #     headers:
-      #       Authorization: "Bearer {{ jwt }}"
-      #     json:
-      #       eventId: "64f7b12abc1234"   # replace with a real event ID
-      #       seats: ["A1", "A2"]
-
-      # Step 4: (Optional) Fetch booking confirmation (uncomment if needed)
-      # - get:
-      #     url: "/api/bookings/me"
-      #     headers:
-      #       Authorization: "Bearer {{ jwt }}"
+          capture:
+            - json: "$.events[0]._id"
+              as: "eventId"
+      - get:
+          url: "/api/events/get-events/{{ eventId }}"
+      - get:
+          url: "/api/user/getUserProfile"
