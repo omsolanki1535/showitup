@@ -27,7 +27,7 @@ export const authenticateOrganizer = (req , res , next) => {
             next();
         }
         else{
-            return res.status(400).send({
+            return res.status(403).send({
                 message : "Unauthorized Access",
                 success : false
             })
@@ -49,7 +49,7 @@ export const authenticateAttendee = (req , res , next) => {
             next();
         }
         else{
-            return res.status(400).send({
+            return res.status(403).send({
                 message : "Unauthorized Access",
                 success : false
             })

@@ -11,18 +11,17 @@ const DashboardHome = () => {
   const fetchStats = async () => {
     try {
       const res = await axios.get(`${import.meta.env.VITE_API}/events/getOrganizerSummary`);
-      setstats(res.data.counts || dummy )
+      setstats(res.data.counts || {})
     } catch (error) {
-      console.log(error.res.data.message)
+      console.error(error.response?.data?.message || error.message)
     }
   }
   const fetchEvents = async () => {
     try {
       const res = await axios.get(`${import.meta.env.VITE_API}/events/get-my-events`);
-      setevents(res.data.events)
-      console.log(res.data.events)
+      setevents(res.data.events || [])
     } catch (error) {
-      console.log(error.res.data.message)
+      console.error(error.response?.data?.message || error.message)
     }
   }
   useEffect(() => {
@@ -63,7 +62,7 @@ const DashboardHome = () => {
       <h2 className="text-3xl font-bold mb-6 text-orange-300">Your Events</h2>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
         {events.map((event) => (
-          <div key={event.id} className="glass rounded-lg shadow-xl overflow-hidden border border-orange-400/20">
+          <div key={event._id} className="glass rounded-lg shadow-xl overflow-hidden border border-orange-400/20">
             <img src={event.banner} alt={event.title} className="w-full h-48 object-cover" />
             <div className="p-6">
               <h3 className="text-xl font-bold text-white mb-2">{event.title}</h3>

@@ -1,11 +1,8 @@
-export const asyncHandler = (fn) => async (req , res , next) => {
+// Forwards errors from async controllers to the central error handler in app.js.
+export const asyncHandler = (fn) => async (req, res, next) => {
     try {
-        await fn(req , res , next)
+        await fn(req, res, next);
     } catch (error) {
-        console.log(error)
-        res.status(500).send({
-            message : "Internal Server Error",
-            success : false
-        })
+        next(error);
     }
-}
+};

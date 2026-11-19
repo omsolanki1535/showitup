@@ -11,6 +11,9 @@ const userSchema = new mongoose.Schema({
   email: {
     type: String,
     required: [true, "Email is required"],
+    unique: true,
+    lowercase: true,
+    trim: true,
   },
   eventsOrganized: [
     {
@@ -35,5 +38,16 @@ const userSchema = new mongoose.Schema({
     enum: ["Attendee", "Organizer", "Admin"],
     default: "Attendee",
   },
-}, { timestamps: true });
+}, {
+  timestamps: true,
+  // Never send password hashes or OTPs back to the client.
+  toJSON: {
+    transform(doc, ret) {
+      delete ret.password;
+      delete ret.otp;
+      delete ret.otpExpires;
+      return ret;
+    },
+  },
+});
 export const User = mongoose.model("User", userSchema);

@@ -4,8 +4,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { eventMarketingFormat, mail } from "../utils/email.js";
 
 const getEmailList = asyncHandler(async (req, res) => {
-  const users = await User.find({ role: "Attendee" }).select("email");
-  console.log(users);
+  const users = await User.find({ role: "Attendee", otp: { $in: [null, ""] } }).select("email");
   return res.status(200).send({
     message: "Emails of Attendee",
     success: true,
@@ -14,7 +13,11 @@ const getEmailList = asyncHandler(async (req, res) => {
 });
 const sendBulkEmails = asyncHandler(async (req, res) => {
   const { event_id, email } = req.body;
-  const event = await Event.findById(event_id); // Fixed: Changed 'id' to 'event_id'
+  if (!event_id || !email) {
+    return res.status(400).json({ success: false, message: "Event and email are required" });
+  }
+  // Organizers can only promote their own events.
+  const event = await Event.findOne({ _id: event_id, organizer: req.user.id });
 
   if (!event) {
     return res.status(404).json({

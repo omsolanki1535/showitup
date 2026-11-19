@@ -249,7 +249,7 @@ const Landing = () => {
               </div>
             </div>
 
-            <style jsx>{`
+            <style>{`
               @keyframes float {
                 0%, 100% {
                   transform: rotateY(25deg) rotateX(8deg) rotateZ(-3deg) translateY(0px);

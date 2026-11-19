@@ -15,81 +15,93 @@ const Checkout = () => {
   // Get data passed from Seats page
   const {
     selectedSeats = [],
-    totalAmount = 0,
     ticketCost = 0
   } = location.state || {};
 
-  const [amount] = useState(totalAmount + 50);
-  const [ticketData, setTicketData] = useState(null); 
-  const [showTicketOptions, setShowTicketOptions] = useState(false); // 
+  const [ticketData, setTicketData] = useState(null);
+  const [showTicketOptions, setShowTicketOptions] = useState(false);
+  const [isPaying, setIsPaying] = useState(false);
+
+  const apiError = (error, fallback) => error?.response?.data?.message || fallback;
+
+  // Books the ticket once a payment has been verified by the backend.
+  const bookTicket = async (paymentId) => {
+    const ticket = await axios.post(`${import.meta.env.VITE_API}/events/book-ticket`, {
+      event_id: id,
+      booking_dateTime: new Date().toISOString(),
+      payment_id: paymentId,
+    });
+    toast.success(ticket.data.message || 'Booking successful!');
+    setTicketData(ticket.data.booking);
+    setShowTicketOptions(true);
+  };
+
   const handlePayment = async () => {
-    try {
-      const res = await axios.post(`${import.meta.env.VITE_API}/payment/order`, {
-        amount
-      });
-      console.log(res.data);
-      handlePaymentVerify(res.data.data)
-    } catch (error) {
-      console.log(error);
-    }
-  }
-  const handlePaymentVerify = async (data) => {
-    try {
-      let checkSeats = await axios.post(`${import.meta.env.VITE_API}/events/check-seats-with-locks` , {
-        event_id : id,
-        seats : selectedSeats
-      });
-      console.log(checkSeats)
-    } catch (error) {
-      toast.error(error.response.data.message);
+    if (!selectedSeats.length) {
+      toast.error('Please select your seats first.');
       return;
     }
-    const options = {
-      key: import.meta.env.VITE_RAZORPAY_KEY,
-      amount: data.amount,
-      currency: data.currency,
-      name: "showitup",
-      description: "Test Mode",
-      order_id: data.id,
-      handler: async (response) => {
-        console.log("Payment verify response : ", response)
-        try {
-          const res = await axios.post(`${import.meta.env.VITE_API}/payment/verify`, {
-            razorpay_order_id: response.razorpay_order_id,
-            razorpay_payment_id: response.razorpay_payment_id,
-            razorpay_signature: response.razorpay_signature,
-          });
-          
-          const ticket = await axios.post(`${import.meta.env.VITE_API}/events/book-ticket`, {
-            event_id: id,
-            booking_dateTime: new Date().toISOString(),
-            seats: selectedSeats.join(','),
-            payment_id: response.razorpay_payment_id,
-            paymentAmt: finalTotal
-          });
+    setIsPaying(true);
+    try {
+      // Make sure nobody else grabbed the seats while we were on this page.
+      await axios.post(`${import.meta.env.VITE_API}/events/check-seats-with-locks`, {
+        event_id: id,
+        seats: selectedSeats
+      });
 
-          if(!ticket.data.success){
-            toast.error(ticket.data.message);
-            return ;
-          }
-          
+      // The server prices the order from the event's ticket cost.
+      const { data: order } = await axios.post(`${import.meta.env.VITE_API}/payment/order`, {
+        event_id: id,
+        seats: selectedSeats
+      });
 
-          if (ticket.data.message) {
-            toast.success(ticket.data.message);
-            setTicketData(ticket.data.booking); // Save ticket data
-            setShowTicketOptions(true); // Show download/share buttons
-          }
-        } catch (error) {
-          toast.error(error.response.data.message);
-        }
-      },
-      theme: {
-        color: "#5f63b8"
+      if (order.demo) {
+        // No Razorpay keys on the server: simulate a successful payment.
+        const { data: verified } = await axios.post(`${import.meta.env.VITE_API}/payment/verify`, {
+          razorpay_order_id: order.data.id,
+        });
+        toast.success('Demo payment approved');
+        await bookTicket(verified.payment_id);
+        setIsPaying(false);
+        return;
       }
-    };
-    const rzp1 = new window.Razorpay(options);
-    rzp1.open();
-  }
+
+      if (!window.Razorpay) {
+        toast.error('Payment gateway failed to load. Please refresh and try again.');
+        setIsPaying(false);
+        return;
+      }
+
+      const rzp = new window.Razorpay({
+        key: import.meta.env.VITE_RAZORPAY_KEY,
+        amount: order.data.amount,
+        currency: order.data.currency,
+        name: "showitup",
+        description: event.title || "Event booking",
+        order_id: order.data.id,
+        handler: async (response) => {
+          try {
+            const { data: verified } = await axios.post(`${import.meta.env.VITE_API}/payment/verify`, {
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            });
+            await bookTicket(verified.payment_id);
+          } catch (error) {
+            toast.error(apiError(error, 'Booking failed after payment. Please contact support.'));
+          } finally {
+            setIsPaying(false);
+          }
+        },
+        modal: { ondismiss: () => setIsPaying(false) },
+        theme: { color: "#ea580c" }
+      });
+      rzp.open();
+    } catch (error) {
+      toast.error(apiError(error, 'Could not start payment. Please try again.'));
+      setIsPaying(false);
+    }
+  };
   useEffect(() => {
     const fetchEvent = async () => {
       try {
@@ -102,7 +114,7 @@ const Checkout = () => {
     fetchEvent();
   }, [id, location.state]);
   
-  const seatPrice = ticketCost || 350;
+  const seatPrice = event.cost ?? ticketCost;
   const convenienceFee = 50;
   const finalTotal = selectedSeats.length * seatPrice + convenienceFee;
 
@@ -131,10 +143,8 @@ const Checkout = () => {
     // showitup logo as styled text
     doc.setFontSize(28);
     doc.setFont('helvetica', 'bold');
-    doc.setTextColor('#3b82f6');
-    doc.text('Host', 40, 60);
-    doc.setTextColor('#22223b');
-    doc.text('itup', 100, 60);
+    doc.setTextColor('#ea580c');
+    doc.text('showitup', 40, 60);
 
     // Movie title
     doc.setFontSize(20);
@@ -180,10 +190,8 @@ const Checkout = () => {
     const doc = new jsPDF({ unit: 'pt', format: 'a4' });
     doc.setFontSize(28);
     doc.setFont('helvetica', 'bold');
-    doc.setTextColor('#3b82f6');
-    doc.text('Host', 40, 60);
-    doc.setTextColor('#22223b');
-    doc.text('itup', 100, 60);
+    doc.setTextColor('#ea580c');
+    doc.text('showitup', 40, 60);
     doc.setFontSize(20);
     doc.setTextColor('#22223b');
     doc.text(ticketData.event_title || 'Event', 40, 100);
@@ -220,7 +228,7 @@ const Checkout = () => {
           title: 'Your showitup Ticket',
           text: 'Here is your ticket!'
         });
-      } catch (err) {
+      } catch {
         toast.error('Sharing cancelled or failed.');
       }
     } else {
@@ -279,8 +287,8 @@ const Checkout = () => {
 
         {/* Payment Button */}
         <div className="relative w-full p-1 rounded-lg overflow-hidden shining-border">
-          <button onClick={handlePayment} className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 rounded-lg transition-colors shadow-lg text-xl relative z-10">
-            Proceed to Payment
+          <button onClick={handlePayment} disabled={isPaying || showTicketOptions} className="w-full disabled:opacity-60 disabled:cursor-not-allowed bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 rounded-lg transition-colors shadow-lg text-xl relative z-10">
+            {showTicketOptions ? 'Booked' : isPaying ? 'Processing...' : 'Proceed to Payment'}
           </button>
         </div>
 

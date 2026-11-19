@@ -1,76 +1,83 @@
-import { connectDB } from "./utils/connectDB.js";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import dotenv from "dotenv";
+import mongoose from "mongoose";
+import { config, validateEnv } from "./config/env.js";
+import { connectDB } from "./utils/connectDB.js";
+import { setIO } from "./utils/socket.js";
 import app from "./app.js";
+import { startCronJobs } from "./cron/updatedEventsStatus.js";
 
-dotenv.config();
+try {
+    validateEnv();
+} catch (error) {
+    console.error(`\n[startup] ${error.message}\n`);
+    process.exit(1);
+}
 
-//cron file import
-import "./cron/updatedEventsStatus.js" 
-
-// Create HTTP server
 const server = createServer(app);
 
-// Initialize Socket.IO
 const io = new Server(server, {
     cors: {
-        origin: process.env.CLIENT_URL,
+        origin: config.clientOrigins.length ? config.clientOrigins : true,
         methods: ["GET", "POST"],
-        credentials: true
-    }
+        credentials: true,
+    },
 });
+setIO(io);
 
-// Socket.IO connection handling
-io.on('connection', (socket) => {
-    console.log('User connected:', socket.id);
-
+io.on("connection", (socket) => {
     // Join event room for seat updates
-    socket.on('join-event', (eventId) => {
+    socket.on("join-event", (eventId) => {
         socket.join(`event-${eventId}`);
-        console.log(`User ${socket.id} joined event ${eventId}`);
     });
 
-    // Leave event room
-    socket.on('leave-event', (eventId) => {
+    socket.on("leave-event", (eventId) => {
         socket.leave(`event-${eventId}`);
-        console.log(`User ${socket.id} left event ${eventId}`);
     });
 
-    // Handle seat selection
-    socket.on('select-seat', async (data) => {
-        const { eventId, seatLabel, userId } = data;
-        try {
-            // Emit seat selection to all users in the event room
-            socket.to(`event-${eventId}`).emit('seat-selected', {
-                seatLabel,
-                userId,
-                timestamp: new Date()
-            });
-        } catch (error) {
-            socket.emit('seat-selection-error', { error: error.message });
-        }
-    });
-
-    // Handle seat deselection
-    socket.on('deselect-seat', (data) => {
-        const { eventId, seatLabel, userId } = data;
-        socket.to(`event-${eventId}`).emit('seat-deselected', {
+    // Broadcast seat selection to everyone else looking at the same event
+    socket.on("select-seat", ({ eventId, seatLabel, userId } = {}) => {
+        socket.to(`event-${eventId}`).emit("seat-selected", {
             seatLabel,
             userId,
-            timestamp: new Date()
+            timestamp: new Date(),
         });
     });
 
-    socket.on('disconnect', () => {
-        console.log('User disconnected:', socket.id);
+    socket.on("deselect-seat", ({ eventId, seatLabel, userId } = {}) => {
+        socket.to(`event-${eventId}`).emit("seat-deselected", {
+            seatLabel,
+            userId,
+            timestamp: new Date(),
+        });
     });
 });
 
-// Export io for use in other files
-export { io };
+const start = async () => {
+    await connectDB();
+    server.listen(config.port, () => {
+        console.log(`Server listening on ${config.port}`);
+        console.log(
+            `Modes: payments=${config.paymentsLive ? "razorpay" : "demo"}, ` +
+            `email=${config.emailLive ? "smtp" : "demo"}, ` +
+            `chatbot=${config.chatbotEnabled ? "gemini" : "disabled"}`
+        );
+    });
+    startCronJobs();
+};
 
-server.listen(process.env.PORT || 8000 , ()=> {
-    connectDB();
-    console.log(`Server listening on ${process.env.PORT || 8000}`)
-})
+const shutdown = (signal) => {
+    console.log(`${signal} received, shutting down`);
+    server.close(async () => {
+        await mongoose.connection.close();
+        process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10000).unref();
+};
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+
+start();
+
+export { io };

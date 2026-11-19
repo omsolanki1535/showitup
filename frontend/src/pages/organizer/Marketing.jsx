@@ -35,7 +35,7 @@ const Marketing = () => {
           withCredentials: true
         });
         setEvents(res.data.events || []);
-      } catch (error) {
+      } catch {
         toast.error('Failed to fetch events');
       }
     };

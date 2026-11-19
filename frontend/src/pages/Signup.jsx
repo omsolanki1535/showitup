@@ -85,7 +85,6 @@ const Signup = () => {
   });
 
   const isAuth = userStore((state) => state.isAuth);
-  const login = userStore((state) => state.login);
   const navigate = useNavigate();
 
   const handleInputChange = (e) => {
@@ -223,8 +222,9 @@ const Signup = () => {
               value={formData.password}
               onChange={handleInputChange}
               className="text-white h-14 placeholder:text-white/50 text-lg w-full border-white/30 bg-white/10 rounded-xl backdrop-blur-sm"
-              placeholder="Password"
+              placeholder="Password (min 8 characters)"
               type="password"
+              minLength={8}
               required
             />
             <select
