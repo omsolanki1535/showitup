@@ -52,12 +52,15 @@ const getEventSeatsAndTimings = asyncHandler(async (req, res) => {
 
   const formattedTimings = event.eventDateTime.map((dt) => {
     const dateObj = new Date(dt);
+    // Format in the venue's time zone, not the server's (hosts run in UTC).
+    const timeZone = process.env.APP_TIMEZONE || "Asia/Kolkata";
     return {
-      date: dateObj.toLocaleDateString("en-CA"),
+      date: dateObj.toLocaleDateString("en-CA", { timeZone }),
       time: dateObj.toLocaleTimeString("en-US", {
         hour: "numeric",
         minute: "2-digit",
         hour12: true,
+        timeZone,
       }),
     };
   });
