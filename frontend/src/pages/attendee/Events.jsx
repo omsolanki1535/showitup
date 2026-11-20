@@ -143,7 +143,6 @@ const Events = () => {
     fetchEvent();
   },[])
   // Filter and search logic
-  const now = new Date();
   const filteredEvents = events?.filter((event) => {
     const matchesCategory = filter === "All" || event.eventType === filter;
     const matchesSearch = event.title.toLowerCase().includes(search.toLowerCase()) || event.description.toLowerCase().includes(search.toLowerCase());
@@ -204,6 +203,7 @@ const Events = () => {
           ) : (
             filteredEvents.map((event) => (
               <EventCard
+                key={event._id}
                 _id = {event._id}
                 title={event.title}
                 date={event.eventDateTime[0]}

@@ -158,7 +158,7 @@ const AddEvent = () => {
     };
 
     try {
-      const res = await axios.post(`${import.meta.env.VITE_API}/events/add-events`, payload, { withCredentials: true });
+      await axios.post(`${import.meta.env.VITE_API}/events/add-events`, payload, { withCredentials: true });
       toast.success('Event created successfully!');
       navigate('/organizer/dashboard');
     } catch (error) {

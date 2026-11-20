@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 
 export const mail = async (content) => {
   if (!process.env.EMAIL || !process.env.PASSWORD) {
+    if (process.env.NODE_ENV === "test") return true;
     console.log("\n[showitup LOCAL DEMO] Email credentials are not configured.");
     console.log("OTP for local verification:", content.__otp || "(not provided)");
     console.log("Configure EMAIL and PASSWORD in backend/.env to send real emails.\n");

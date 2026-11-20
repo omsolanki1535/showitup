@@ -15,8 +15,12 @@ const addReview = asyncHandler(async (req, res) => {
     });
   }
 
+  if (String(review).length > 1000) {
+    return res.status(400).send({ message: "Review must be under 1000 characters", success: false });
+  }
+
   const user_id = req.user.id;
-  const username = await User.findById(user_id)
+  const user = await User.findById(user_id).select("username");
 
   const result = sentiment.analyze(review);
   let sentimentCategory = "neutral";
@@ -25,7 +29,7 @@ const addReview = asyncHandler(async (req, res) => {
   else if (result.score < -1) sentimentCategory = "negative";
 
 
-  const newReview = new Review({ event_id, user_id, review, sentiment: sentimentCategory , score: result.score , username });
+  const newReview = new Review({ event_id, user_id, review, sentiment: sentimentCategory, score: result.score, username: user?.username });
   await newReview.save();
 
   res.status(201).send({

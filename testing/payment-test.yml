@@ -1,41 +1,38 @@
+# Artillery load test for checkout in demo payment mode (no Razorpay keys).
+# Each virtual user creates a server-priced order and verifies it. It does not
+# book seats, so the seat map is left untouched.
+#   npx artillery run testing/payment-test.yml
 config:
-  target: "http://localhost:8000"   # change to your deployed URL when testing Render
+  target: "http://localhost:8000"
   phases:
     - duration: 60
-      arrivalRate: 50    # start with 50 users/sec, later try 100–200 for stress
+      arrivalRate: 10
   variables:
-    email: "riteshborse008@gmail.com"
-    password: "ritesh2005"
+    email: "attendee@showitup.demo"
+    password: "Demo@1234"
 
 scenarios:
-  - name: "Login + Create Razorpay Order"
+  - name: "Login + create order + verify demo payment"
     flow:
       - post:
           url: "/api/user/login"
           json:
             email: "{{ email }}"
             password: "{{ password }}"
+      - get:
+          url: "/api/events/get-events"
           capture:
-            - json: "$.token"
-              as: "jwt"
-
+            - json: "$.events[0]._id"
+              as: "eventId"
       - post:
-          url: "/api/payment/create-order"
-          headers:
-            Authorization: "Bearer {{ jwt }}"
+          url: "/api/payment/order"
           json:
-            amount: 50000
-            currency: "INR"
-            receipt: "test_receipt_1"
+            event_id: "{{ eventId }}"
+            seats: ["A1"]
           capture:
-            - json: "$.order.id"
+            - json: "$.data.id"
               as: "orderId"
-
       - post:
           url: "/api/payment/verify"
-          headers:
-            Authorization: "Bearer {{ jwt }}"
           json:
-            razorpay_payment_id: "pay_test123"
             razorpay_order_id: "{{ orderId }}"
-            razorpay_signature: "sig_test123"

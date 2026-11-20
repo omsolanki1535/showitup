@@ -4,6 +4,9 @@ import { Event } from "../models/events.model.js";
 import { Booking } from "../models/bookings.model.js";
 
 export const getAdminDashboard = asyncHandler(async (req, res) => {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+
   const [
     totalUsers,
     totalOrganizers,
@@ -15,6 +18,9 @@ export const getAdminDashboard = asyncHandler(async (req, res) => {
     users,
     events,
     bookings,
+    usersToday,
+    eventsToday,
+    categories,
   ] = await Promise.all([
     User.countDocuments(),
     User.countDocuments({ role: "Organizer" }),
@@ -23,10 +29,17 @@ export const getAdminDashboard = asyncHandler(async (req, res) => {
     Event.countDocuments({ status: "active" }),
     Event.countDocuments({ status: "completed" }),
     Event.countDocuments({ status: "upcoming" }),
-    User.find().sort({ createdAt: -1 }).limit(8).select("username email role createdAt"),
+    User.find().sort({ createdAt: -1 }).limit(200).select("username email role createdAt otp eventsOrganized eventsAttended"),
     Event.find().sort({ createdAt: -1 }).limit(12).populate("organizer", "username email"),
     Booking.find().sort({ createdAt: -1 }).populate("user_id", "username email").populate("event_id", "title location eventDateTime"),
+    User.countDocuments({ createdAt: { $gte: startOfDay } }),
+    Event.countDocuments({ createdAt: { $gte: startOfDay } }),
+    Event.aggregate([{ $group: { _id: "$eventType", count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
   ]);
+
+  const revenueToday = bookings
+    .filter((booking) => booking.createdAt >= startOfDay)
+    .reduce((sum, booking) => sum + Number(booking.paymentAmt || 0), 0);
 
   const totalRevenue = bookings.reduce((sum, booking) => sum + Number(booking.paymentAmt || 0), 0);
 
@@ -48,7 +61,27 @@ export const getAdminDashboard = asyncHandler(async (req, res) => {
       completedEvents,
       pendingEvents,
     },
-    users,
+    today: {
+      users: usersToday,
+      events: eventsToday,
+      bookings: bookings.filter((booking) => booking.createdAt >= startOfDay).length,
+      revenue: revenueToday,
+    },
+    eventCategories: categories.map((c) => ({
+      name: c._id || "Other",
+      count: c.count,
+      value: totalEvents ? Math.round((c.count / totalEvents) * 100) : 0,
+    })),
+    // Expose verification status without leaking the OTP itself.
+    users: users.map((u) => ({
+      _id: u._id,
+      username: u.username,
+      email: u.email,
+      role: u.role,
+      createdAt: u.createdAt,
+      verified: !u.otp,
+      eventsCount: (u.eventsOrganized?.length || 0) + (u.eventsAttended?.length || 0),
+    })),
     events,
     bookings,
   });

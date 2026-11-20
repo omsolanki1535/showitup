@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import toast from 'react-hot-toast';
+import { Link } from 'react-router-dom';
+import { userStore } from '../../context/userContext';
 import { 
   Users, 
   Calendar, 
@@ -7,8 +10,6 @@ import {
   TrendingUp, 
   UserCheck, 
   UserX, 
-  Eye, 
-  Edit, 
   Trash2, 
   Search,
   Filter,
@@ -40,6 +41,8 @@ const Dashboard = () => {
   const [recentUsers, setRecentUsers] = useState([]);
   const [recentEvents, setRecentEvents] = useState([]);
   const [analytics, setAnalytics] = useState({});
+  const [today, setToday] = useState({ users: 0, events: 0, bookings: 0, revenue: 0 });
+  const percentOfUsers = (count) => (stats.totalUsers ? ((count / stats.totalUsers) * 100).toFixed(1) : '0.0');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -57,7 +60,9 @@ const Dashboard = () => {
           name: user.username,
           email: user.email,
           role: user.role?.toLowerCase() || 'attendee',
-          status: 'active',
+          status: user.verified ? 'active' : 'pending',
+          eventsCount: user.eventsCount || 0,
+          lastActive: user.createdAt ? new Date(user.createdAt).toLocaleDateString() : '-',
         })));
         setRecentEvents(data.events.map((event) => ({
           id: event._id,
@@ -69,8 +74,9 @@ const Dashboard = () => {
           revenue: event.totalRevenue || 0,
           status: event.status,
         })));
+        setToday(data.today || { users: 0, events: 0, bookings: 0, revenue: 0 });
         setAnalytics({
-          eventCategories: [],
+          eventCategories: data.eventCategories || [],
         });
       } catch (error) {
         console.error('Unable to load admin dashboard:', error);
@@ -81,6 +87,48 @@ const Dashboard = () => {
 
     fetchDashboard();
   }, []);
+
+  const currentUser = userStore((state) => state.user);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+
+  const changeRole = async (userId, role) => {
+    try {
+      await axios.patch(`${import.meta.env.VITE_API}/admin/users/${userId}/role`, { role }, { withCredentials: true });
+      setRecentUsers((users) => users.map((u) => (u.id === userId ? { ...u, role: role.toLowerCase() } : u)));
+      toast.success(`Role changed to ${role}`);
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Could not change role');
+    }
+  };
+
+  const deleteUser = async (userId) => {
+    if (confirmDeleteId !== userId) {
+      setConfirmDeleteId(userId);
+      toast('Click delete again to confirm', { icon: '⚠️' });
+      return;
+    }
+    try {
+      await axios.delete(`${import.meta.env.VITE_API}/admin/users/${userId}`, { withCredentials: true });
+      setRecentUsers((users) => users.filter((u) => u.id !== userId));
+      toast.success('User deleted');
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Could not delete user');
+    } finally {
+      setConfirmDeleteId(null);
+    }
+  };
+
+  const exportUsersCsv = () => {
+    const escape = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const rows = [['Name', 'Email', 'Role', 'Status', 'Events', 'Joined'], ...filteredUsers.map((u) => [u.name, u.email, u.role, u.status, u.eventsCount, u.lastActive])];
+    const blob = new Blob([rows.map((r) => r.map(escape).join(',')).join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'showitup-users.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const filteredUsers = recentUsers.filter(user => {
     const matchesSearch = user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -103,6 +151,7 @@ const Dashboard = () => {
     switch (role) {
       case 'organizer': return 'bg-orange-500';
       case 'attendee': return 'bg-rose-500';
+      case 'admin': return 'bg-amber-600';
       default: return 'bg-gray-500';
     }
   };
@@ -215,7 +264,7 @@ const Dashboard = () => {
                   <span className="font-semibold text-white">{stats.completedEvents || 0}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-orange-200">Pending Events</span>
+                  <span className="text-orange-200">Upcoming Events</span>
                   <span className="font-semibold text-white">{stats.pendingEvents || 0}</span>
                 </div>
               </div>
@@ -225,20 +274,21 @@ const Dashboard = () => {
               <div className="space-y-3">
                 <div className="flex justify-between">
                   <span className="text-orange-200">Organizers</span>
-                  <span className="font-semibold text-white">{((stats.totalOrganizers / stats.totalUsers) * 100).toFixed(1)}%</span>
+                  <span className="font-semibold text-white">{percentOfUsers(stats.totalOrganizers)}%</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-orange-200">Attendees</span>
-                  <span className="font-semibold text-white">{((stats.totalAttendees / stats.totalUsers) * 100).toFixed(1)}%</span>
+                  <span className="font-semibold text-white">{percentOfUsers(stats.totalAttendees)}%</span>
                 </div>
               </div>
             </div>
             <div className="glass p-6 rounded-lg shadow-xl border border-orange-400/20">
               <h3 className="text-lg font-semibold text-white mb-4">Recent Activity</h3>
               <div className="space-y-2 text-sm">
-                <p className="text-orange-200">New user registrations: <span className="text-white">+45 today</span></p>
-                <p className="text-orange-200">Events created: <span className="text-white">+12 today</span></p>
-                <p className="text-orange-200">Revenue generated: <span className="text-white">₹125,000 today</span></p>
+                <p className="text-orange-200">New user registrations: <span className="text-white">+{today.users} today</span></p>
+                <p className="text-orange-200">Events created: <span className="text-white">+{today.events} today</span></p>
+                <p className="text-orange-200">Tickets booked: <span className="text-white">{today.bookings} today</span></p>
+                <p className="text-orange-200">Revenue generated: <span className="text-white">₹{today.revenue.toLocaleString()} today</span></p>
               </div>
             </div>
           </div>
@@ -271,6 +321,7 @@ const Dashboard = () => {
                 <option value="all">All Roles</option>
                 <option value="organizer">Organizers</option>
                 <option value="attendee">Attendees</option>
+                <option value="admin">Admins</option>
               </select>
               <select
                 className="px-4 py-2 rounded-lg border border-orange-400/20 bg-gray-800 text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
@@ -278,11 +329,10 @@ const Dashboard = () => {
                 onChange={(e) => setFilterStatus(e.target.value)}
               >
                 <option value="all">All Status</option>
-                <option value="active">Active</option>
-                <option value="pending">Pending</option>
-                <option value="suspended">Suspended</option>
+                <option value="active">Verified</option>
+                <option value="pending">Awaiting OTP</option>
               </select>
-              <button className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors">
+              <button onClick={exportUsersCsv} title="Export as CSV" className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors">
                 <Download className="w-4 h-4" />
               </button>
             </div>
@@ -298,7 +348,7 @@ const Dashboard = () => {
                     <th className="px-6 py-3 text-left text-xs font-medium text-orange-200 uppercase tracking-wider">Role</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-orange-200 uppercase tracking-wider">Status</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-orange-200 uppercase tracking-wider">Events</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-orange-200 uppercase tracking-wider">Last Active</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-orange-200 uppercase tracking-wider">Joined</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-orange-200 uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
@@ -328,14 +378,24 @@ const Dashboard = () => {
                         {user.lastActive}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <div className="flex gap-2">
-                          <button className="text-orange-400 hover:text-orange-300">
-                            <Eye className="w-4 h-4" />
-                          </button>
-                          <button className="text-green-400 hover:text-green-300">
-                            <Edit className="w-4 h-4" />
-                          </button>
-                          <button className="text-red-400 hover:text-red-300">
+                        <div className="flex items-center gap-3">
+                          <select
+                            aria-label={`Role for ${user.name}`}
+                            value={user.role.charAt(0).toUpperCase() + user.role.slice(1)}
+                            onChange={(e) => changeRole(user.id, e.target.value)}
+                            disabled={user.id === currentUser?.id}
+                            className="px-2 py-1 rounded-md border border-orange-400/20 bg-gray-800 text-white text-xs disabled:opacity-50"
+                          >
+                            <option value="Attendee">Attendee</option>
+                            <option value="Organizer">Organizer</option>
+                            <option value="Admin">Admin</option>
+                          </select>
+                          <button
+                            onClick={() => deleteUser(user.id)}
+                            disabled={user.id === currentUser?.id}
+                            title={confirmDeleteId === user.id ? 'Click again to confirm' : 'Delete user'}
+                            className={`${confirmDeleteId === user.id ? 'text-red-300 animate-pulse' : 'text-red-400'} hover:text-red-300 disabled:opacity-30`}
+                          >
                             <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
@@ -384,12 +444,9 @@ const Dashboard = () => {
                   </p>
                 </div>
                 <div className="flex gap-2 mt-4">
-                  <button className="flex-1 px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors text-sm">
+                  <Link to={`/events/${event.id}`} className="flex-1 text-center px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors text-sm">
                     View Details
-                  </button>
-                  <button className="px-3 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors">
-                    <Edit className="w-4 h-4" />
-                  </button>
+                  </Link>
                 </div>
               </div>
             ))}
@@ -427,7 +484,7 @@ const Dashboard = () => {
                 <div key={index} className="text-center">
                   <div 
                     className="w-16 h-16 rounded-full mx-auto mb-2 flex items-center justify-center"
-                    style={{ backgroundColor: category.color }}
+                    style={{ backgroundColor: ['#ea580c', '#e11d48', '#d97706', '#c2410c', '#be123c'][index % 5] }}
                   >
                     <span className="text-white font-bold">{category.value}%</span>
                   </div>

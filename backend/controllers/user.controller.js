@@ -5,14 +5,42 @@ import { generateOTP } from "../utils/generateOTP.js";
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
-const register = asyncHandler(async (req, res) => {
-    const { email, username, password, role } = req.body;
+// Admin accounts are created only with `npm run create-admin`, never through signup.
+const SIGNUP_ROLES = ["Attendee", "Organizer"];
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
 
-    if (!email || !username || !password || !role) {
+// In production the frontend and API usually live on different domains, so the
+// cookie must be cross-site (SameSite=None; Secure). Set COOKIE_SECURE=false
+// when serving over plain HTTP from one origin (e.g. the Docker Compose setup).
+const cookieOptions = () => {
+    const secure = process.env.NODE_ENV === "production" && process.env.COOKIE_SECURE !== "false";
+    return {
+        httpOnly: true,
+        sameSite: secure ? "None" : "Lax",
+        secure,
+    };
+};
+
+const register = asyncHandler(async (req, res) => {
+    const { username, password } = req.body;
+    const email = normalizeEmail(req.body.email);
+    const role = req.body.role || "Attendee";
+
+    if (!email || !username || !password) {
         return res.status(400).send({
             message: "All fields are required",
             success: false
         });
+    }
+    if (!EMAIL_PATTERN.test(email)) {
+        return res.status(400).send({ message: "Please enter a valid email address", success: false });
+    }
+    if (String(password).length < 8) {
+        return res.status(400).send({ message: "Password must be at least 8 characters", success: false });
+    }
+    if (!SIGNUP_ROLES.includes(role)) {
+        return res.status(400).send({ message: "Role must be Attendee or Organizer", success: false });
     }
 
     let user = await User.findOne({ email });
@@ -27,7 +55,7 @@ const register = asyncHandler(async (req, res) => {
     const hashPassword = await bcrypt.hash(password, 10);
 
     user = new User({
-        username,
+        username: String(username).trim(),
         email,
         password: hashPassword,
         role,
@@ -59,7 +87,8 @@ const register = asyncHandler(async (req, res) => {
 });
 
 const verifyOtp = asyncHandler(async (req, res) => {
-    const { otp, email } = req.body;
+    const { otp } = req.body;
+    const email = normalizeEmail(req.body.email);
 
     if (!otp || !email) {
         return res.status(400).send({
@@ -70,7 +99,7 @@ const verifyOtp = asyncHandler(async (req, res) => {
 
     const user = await User.findOne({ email });
 
-    if (!user || user.otp !== otp || Date.now() > user.otpExpires) {
+    if (!user || !user.otp || user.otp !== String(otp) || Date.now() > user.otpExpires) {
         return res.status(400).send({
             message: "OTP not verified or expired",
             success: false
@@ -82,14 +111,15 @@ const verifyOtp = asyncHandler(async (req, res) => {
     await user.save();
 
     return res.status(200).send({
-        user,
+        user: { id: user._id, email: user.email, username: user.username, role: user.role },
         message: "OTP verified. Registration successful",
         success: true
     });
 });
 
 const login = asyncHandler(async (req, res) => {
-    const { email, password } = req.body;
+    const { password } = req.body;
+    const email = normalizeEmail(req.body.email);
 
     if (!email || !password) {
         return res.status(400).send({
@@ -102,7 +132,7 @@ const login = asyncHandler(async (req, res) => {
 
     if (!user) {
         return res.status(400).send({
-            message: "User does not exist",
+            message: "Incorrect email or password",
             success: false
         });
     }
@@ -137,13 +167,9 @@ const login = asyncHandler(async (req, res) => {
         { expiresIn: "1d" }
     );
 
-    const isProduction = process.env.NODE_ENV === "production";
-
     return res.status(200)
         .cookie("token", token, {
-            httpOnly: true,
-            sameSite: isProduction ? "None" : "Lax",
-            secure: isProduction,
+            ...cookieOptions(),
             maxAge: 24 * 60 * 60 * 1000
         })
         .send({
@@ -153,7 +179,6 @@ const login = asyncHandler(async (req, res) => {
                 username: user.username,
                 role: user.role
             },
-            token,
             message: "Login successful",
             success: true
         });
@@ -180,10 +205,7 @@ const getUserProfile = asyncHandler(async (req, res) => {
 });
 
 const logout = asyncHandler(async (req ,res) => {
-    res.clearCookie("token" , {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-    });
+    res.clearCookie("token", cookieOptions());
     return res.status(200).send({
         message : "Logout Successfull", 
         success : true
@@ -191,7 +213,7 @@ const logout = asyncHandler(async (req ,res) => {
 })
 
 const resendOtp = asyncHandler(async (req, res) => {
-    const { email } = req.body;
+    const email = normalizeEmail(req.body.email);
     if (!email) return res.status(400).send({ message: "Email is required", success: false });
 
     const user = await User.findOne({ email });

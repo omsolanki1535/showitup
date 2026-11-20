@@ -122,10 +122,8 @@ const Seats = () => {
       try {
         const response = await axios.get(`${import.meta.env.VITE_API}/events/seat-locks/${id}`, { withCredentials: true });
         if (response.data.success) {
-          const currentUserId = response.data.currentUserId;
           
           // Separate locks by current user vs other users
-          const currentUserLocks = response.data.locks.filter(lock => lock.isCurrentUser);
           const otherUserLocks = response.data.locks.filter(lock => !lock.isCurrentUser);
           
           // Only show other users' locks as "locked" - current user's locks are handled by selectedSeats
@@ -415,7 +413,7 @@ const Seats = () => {
         <div className="w-full lg:w-1/4 glass rounded-xl p-6 shadow-lg">
           <h2 className="text-xl font-bold mb-6">Available Timings</h2>
           <div className="space-y-4">
-            {eventData.eventDateTime?.map((dateTime, index) => {
+            {eventData.eventDateTime?.map((dateTime) => {
               const timing = `${dateTime.date} ${dateTime.time}`;
               return (
                 <button

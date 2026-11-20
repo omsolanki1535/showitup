@@ -156,7 +156,7 @@ const EditEvent = () => {
     };
 
     try {
-      const res = await axios.post(`${import.meta.env.VITE_API}/events/update-my-event/${id}`, payload, { withCredentials: true });
+      await axios.post(`${import.meta.env.VITE_API}/events/update-my-event/${id}`, payload, { withCredentials: true });
       toast.success('Event updated successfully!');
       navigate('/organizer/list-shows');
     } catch (error) {

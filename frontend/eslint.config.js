@@ -26,4 +26,13 @@ export default defineConfig([
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
     },
   },
+  {
+    // shadcn/ui components export their variant helpers next to the component.
+    files: ['src/components/ui/**/*.jsx'],
+    rules: { 'react-refresh/only-export-components': 'off' },
+  },
+  {
+    files: ['vite.config.js'],
+    languageOptions: { globals: globals.node },
+  },
 ])

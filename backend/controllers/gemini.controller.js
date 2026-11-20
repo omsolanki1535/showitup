@@ -1,4 +1,4 @@
-import { model } from "../app.js";
+import { model } from "../services/gemini/model.js";
 import { Event } from "../models/events.model.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
@@ -52,9 +52,12 @@ const getTodaysEvents = async () => {
   return matchedEvents.map(e => simplifyEvent(e, start));
 };
 
+// User text goes into $regex; escape it so it is matched literally.
+const escapeRegex = (value) => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const getEventsByLocation = async (location) => {
   const matchedEvents = await Event.find({
-    location: { $regex: location, $options: "i" }
+    location: { $regex: escapeRegex(location), $options: "i" }
   }).sort({ eventDateTime: 1 }).limit(10);
 
   return matchedEvents.map(e => simplifyEvent(e));
@@ -62,7 +65,7 @@ const getEventsByLocation = async (location) => {
 
 const getEventsByTitle = async (title) => {
   const matchedEvents = await Event.find({
-    title: { $regex: title, $options: "i" }
+    title: { $regex: escapeRegex(title), $options: "i" }
   }).sort({ eventDateTime: 1 }).limit(10);
 
   return matchedEvents.map(e => simplifyEvent(e));
@@ -70,7 +73,7 @@ const getEventsByTitle = async (title) => {
 
 const getEventsByDescription = async (keyword) => {
   const matchedEvents = await Event.find({
-    description: { $regex: keyword, $options: "i" }
+    description: { $regex: escapeRegex(keyword), $options: "i" }
   }).sort({ eventDateTime: 1 }).limit(10);
 
   return matchedEvents.map(e => simplifyEvent(e));
@@ -78,6 +81,12 @@ const getEventsByDescription = async (keyword) => {
 
 const geminiChatBot = asyncHandler(async (req, res) => {
   const { prompt } = req.body;
+  if (!model) {
+    return res.status(503).json({ reply: "The assistant is not configured on this server yet. Browse events from the Events page instead." });
+  }
+  if (!prompt || String(prompt).length > 500) {
+    return res.status(400).json({ reply: "Please ask a question under 500 characters." });
+  }
   const chat = model.startChat();
   const result = await chat.sendMessage(prompt);
   const response = result.response;

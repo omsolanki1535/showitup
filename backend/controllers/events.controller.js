@@ -4,25 +4,18 @@ import { User } from "../models/user.model.js";
 import { SeatLock } from "../models/seatLock.model.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import QRCode from 'qrcode';
-import { areArraysEqual } from "../utils/arrayUtils.js";
 import { confirmationFormat, mail } from "../utils/email.js";
-import dayjs from 'dayjs';
 import mongoose from 'mongoose';
 import { Payment } from "../models/payment.model.js";
+import { getIO } from "../utils/socket.js";
 
 const getEvents = asyncHandler(async (req, res) => {
   let events = await Event.find({}).select(
     "-users -totalBookings -totalRevenue -certificate"
   );
-  if (!events.length) {
-    return res.status(400).send({
-      message: "No Events Found",
-      success: true,
-    });
-  }
   return res.status(200).send({
     events,
-    message: "Events Found",
+    message: events.length ? "Events Found" : "No Events Found",
     success: true,
   });
 });
@@ -59,12 +52,15 @@ const getEventSeatsAndTimings = asyncHandler(async (req, res) => {
 
   const formattedTimings = event.eventDateTime.map((dt) => {
     const dateObj = new Date(dt);
+    // Format in the venue's time zone, not the server's (hosts run in UTC).
+    const timeZone = process.env.APP_TIMEZONE || "Asia/Kolkata";
     return {
-      date: dateObj.toLocaleDateString("en-CA"),
+      date: dateObj.toLocaleDateString("en-CA", { timeZone }),
       time: dateObj.toLocaleTimeString("en-US", {
         hour: "numeric",
         minute: "2-digit",
         hour12: true,
+        timeZone,
       }),
     };
   });
@@ -82,13 +78,6 @@ const getEventSeatsAndTimings = asyncHandler(async (req, res) => {
 const getMyEvents = asyncHandler(async(req , res) => {
   const userId = req.user.id ;
   const events = await Event.find({organizer : userId}).select("-seatMap")
-  if(!events.length)
-{
-  return res.status(404).json({
-    success : false , 
-    message : "You have not created any events yet"
-  }) ;
-}
     return res.status(200).json({
     success: true,
     events,
@@ -159,13 +148,17 @@ const postEvent = asyncHandler(async (req, res) => {
 
   let finalSeatMap = [];
 
+  if (isNaN(Number(cost)) || Number(cost) < 0) {
+    return res.status(400).json({ success: false, message: "Cost must be a positive number." });
+  }
+
   if (seats.type === "RowColumns") {
     const [rows, cols] = seats.value.split("x").map(Number);
 
-    if (isNaN(rows) || isNaN(cols)) {
+    if (!Number.isInteger(rows) || !Number.isInteger(cols) || rows < 1 || cols < 1 || rows > 26 || cols > 50) {
       return res.status(400).json({
         success: false,
-        message: "Invalid RowColumns format. Use format like '10x8'.",
+        message: "Invalid RowColumns format. Use format like '10x8' (up to 26 rows and 50 columns).",
       });
     }
 
@@ -182,7 +175,7 @@ const postEvent = asyncHandler(async (req, res) => {
         message: "Seat map is required when seats.type is 'direct'.",
       });
     }
-    finalSeatMap = seatMap;
+    finalSeatMap = seatMap.map((s) => ({ seatLabel: String(s.seatLabel), isBooked: false }));
   } else {
     return res.status(400).json({
       success: false,
@@ -229,12 +222,24 @@ const updateMyEvent = asyncHandler(async (req, res) => {
     });
   }
 
-  const updateData = { ...req.body };
+  // Only these fields may be edited. Seat maps, revenue, booking counts,
+  // status and organizer are managed by the server.
+  const editable = ['title', 'description', 'location', 'eventType', 'banner', 'image', 'eventDateTime', 'cost', 'certificate', 'special'];
+  const updateData = {};
+  for (const key of editable) {
+    if (req.body[key] !== undefined) updateData[key] = req.body[key];
+  }
+  if (updateData.cost !== undefined && (isNaN(Number(updateData.cost)) || Number(updateData.cost) < 0)) {
+    return res.status(400).json({ success: false, message: "Cost must be a positive number." });
+  }
+  if (updateData.cost !== undefined && event.totalBookings > 0 && Number(updateData.cost) !== event.cost) {
+    return res.status(400).json({ success: false, message: "Ticket price cannot change after bookings have been made." });
+  }
 
   const updatedEvent = await Event.findByIdAndUpdate(
     id,
     { $set: updateData },
-    { new: true}
+    { new: true, runValidators: true }
   );
 
   if (!updatedEvent) {
@@ -292,16 +297,9 @@ const getBookings = asyncHandler(async(req , res) => {
   const userId = req.user.id ;
 
   const bookings = await Booking.find({ organizer_id : userId})
-  .populate("user_id" , )
+  .populate("user_id" , "username email")
   .populate("event_id" , "title");
 
-  if(!bookings.length)
-  {
-    return res.status(404).json({
-      success : false , 
-      message : "No bookings" 
-    })
-  }
     return res.status(200).json({
     success: true,
     bookings,
@@ -315,12 +313,6 @@ const getMyBookings = asyncHandler(async(req , res) => {
   const bookings = await Booking.find({ user_id: userId })
     .populate("event_id", "title eventDateTime location image eventType");
 
-    if (!bookings.length) {
-    return res.status(404).json({
-      success: false,
-      message: "You have not booked any events",
-    });
-  }
 
   return res.status(200).json({
     success: true,
@@ -410,171 +402,143 @@ const generateTicketQR = async (data) => {
 
 const bookTicket = asyncHandler(async (req, res) => {
   const user_id = req.user.id;
-  const { event_id, booking_dateTime, seats, payment_id, paymentAmt } = req.body;
-  if (!event_id || !booking_dateTime || !seats || !payment_id || !paymentAmt) {
+  const { event_id, booking_dateTime, payment_id } = req.body;
+
+  if (!mongoose.isValidObjectId(event_id) || !payment_id) {
     return res.status(400).json({
       success: false,
-      message: 'All fields are required.',
+      message: 'Event and payment are required.',
     });
   }
 
-  let checkPayment = await Payment.findOne({razorpay_payment_id : payment_id});
-  if(!checkPayment){
-    return res.status(400).send({
-      message : "Payment is not completed",
-      success : false
-    })
-  }
-  console.log(checkPayment);
-  const seatList = seats.split(',').map(s => s.trim());
-
-  try {
-    // Find event
-    const event = await Event.findById(event_id);
-    if (!event) {
-      return res.status(404).json({
-        success: false,
-        message: 'Event not found'
-      });
-    }
-
-    // Check for active locks on the seats
-    const activeLocks = await SeatLock.find({
-      event_id: event_id,
-      seatLabel: { $in: seatList },
-      expiresAt: { $gt: new Date() }
-    });
-
-    if (activeLocks.length > 0) {
-      // Check if any locked seats belong to other users
-      const otherUserLocks = activeLocks.filter(lock => 
-        lock.user_id.toString() !== user_id.toString()
-      );
-      
-      if (otherUserLocks.length > 0) {
-        const lockedSeats = otherUserLocks.map(lock => lock.seatLabel);
-        return res.status(400).json({
-          success: false,
-          message: `Seats ${lockedSeats.join(', ')} are currently being selected by other users`
-        });
-      }
-      
-      // If all locks belong to the current user, remove them after successful booking
-      // This will be handled after the booking is successful
-    }
-
-    // Check if seats are already booked
-    const invalidSeats = [];
-    const updatedSeatMap = event.seatMap.map(seatObj => {
-      if (seatList.includes(seatObj.seatLabel)) {
-        if (seatObj.isBooked) {
-          invalidSeats.push(seatObj.seatLabel);
-        }
-        return { ...seatObj, isBooked: true };
-      }
-      return seatObj;
-    });
-
-    if (invalidSeats.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: `These seats are already booked: ${invalidSeats.join(', ')}`
-      });
-    }
-
-    // Update event seat map
-    event.seatMap = updatedSeatMap;
-    event.totalBookings = (event.totalBookings || 0) + seatList.length;
-    event.totalRevenue = (event.totalRevenue || 0) + Number(paymentAmt);
-    await event.save();
-
-    // Generate QR code
-    const qrCodeData = {
-      event: event_id,
-      user: user_id,
-      seats: seatList,
-      time: booking_dateTime,
-      payment: payment_id
-    };
-    const qrCode = await generateTicketQR(qrCodeData);
-
-    // Create booking
-    const booking = await Booking.create({
+  // Claim the payment atomically so it can only ever produce one booking.
+  // Seats and amount come from the server-priced order, not the request.
+  const payment = await Payment.findOneAndUpdate(
+    {
+      razorpay_payment_id: String(payment_id),
       user_id,
       event_id,
-      event_title: event.title,
-      organizer_id: event.organizer,
-      booking_dateTime,
-      seats: seatList.join(','),
-      ticket_qr: qrCode,
-      payment_id,
-      paymentAmt
-    });
-
-    // Remove any locks for these seats (cleanup)
-    await SeatLock.deleteMany({
-      event_id: event_id,
-      seatLabel: { $in: seatList }
-    });
-
-    // Emit booking confirmation to all users in the event room
-    const { io } = await import('../index.js');
-    if (io) {
-      io.to(`event-${event_id}`).emit('seats-booked', {
-        seats: seatList,
-        timestamp: new Date()
-      });
-    }
-
-    res.status(201).json({
-      success: true,
-      message: 'Booking successful!',
-      booking
-    });
-
-    // Send confirmation email
-    try {
-      const base64Data = booking.ticket_qr.split(',')[1]; 
-      const htmlContent = confirmationFormat(
-        event.title,
-        booking.booking_dateTime,
-        booking.seats,
-        req.user.email,
-        booking.ticket_qr, 
-        booking.payment_id,
-        booking.paymentAmt
-      );
-
-      const finalHtml = htmlContent.replace(
-        "{{TICKET_QR}}",
-        `<img src="cid:ticketqr" alt="Ticket QR" style="width: 200px;" />`
-      );
-
-      const content = {
-        to: req.user.email,
-        subject: "Confirmation of Ticket",
-        html: finalHtml,
-        attachments: [
-          {
-            filename: "ticketqr.png",
-            content: base64Data,
-            encoding: "base64",
-            cid: "ticketqr", 
-          },
-        ],
-      };
-
-      await mail(content);
-    } catch (emailError) {
-      console.error('Error sending confirmation email:', emailError);
-      // Don't fail the booking if email fails
-    }
-
-  } catch (error) {
-    res.status(400).json({
+      status: 'paid',
+    },
+    { $set: { status: 'used' } },
+    { new: true }
+  );
+  if (!payment) {
+    return res.status(400).json({
       success: false,
-      message: error.message
+      message: 'Payment is not completed or has already been used',
     });
+  }
+
+  const seatList = payment.seats;
+  const releasePayment = () =>
+    Payment.updateOne({ _id: payment._id }, { $set: { status: 'paid' } });
+
+  // Seats locked by someone else block the booking.
+  const otherUserLocks = await SeatLock.find({
+    event_id,
+    seatLabel: { $in: seatList },
+    expiresAt: { $gt: new Date() },
+    user_id: { $ne: user_id },
+  });
+  if (otherUserLocks.length > 0) {
+    await releasePayment();
+    return res.status(400).json({
+      success: false,
+      message: `Seats ${otherUserLocks.map(l => l.seatLabel).join(', ')} are currently being selected by other users`,
+    });
+  }
+
+  // Mark every seat booked in one atomic update. The filter only matches if
+  // none of the requested seats is already booked, so two people paying for
+  // the same seat at the same moment cannot both succeed.
+  const update = await Event.updateOne(
+    {
+      _id: event_id,
+      seatMap: { $not: { $elemMatch: { seatLabel: { $in: seatList }, isBooked: true } } },
+    },
+    {
+      $set: { 'seatMap.$[seat].isBooked': true },
+      $inc: { totalBookings: seatList.length, totalRevenue: payment.amount },
+      $addToSet: { users: user_id },
+    },
+    { arrayFilters: [{ 'seat.seatLabel': { $in: seatList } }] }
+  );
+
+  if (update.modifiedCount !== 1) {
+    await releasePayment();
+    return res.status(409).json({
+      success: false,
+      message: 'One or more of these seats were just booked by someone else. Please choose different seats.',
+    });
+  }
+
+  const event = await Event.findById(event_id).select('title organizer');
+  const bookingTime = booking_dateTime && !isNaN(new Date(booking_dateTime)) ? new Date(booking_dateTime) : new Date();
+
+  const qrCode = await generateTicketQR({
+    event: event_id,
+    user: user_id,
+    seats: seatList,
+    time: bookingTime,
+    payment: payment.razorpay_payment_id,
+  });
+
+  const booking = await Booking.create({
+    user_id,
+    event_id,
+    event_title: event.title,
+    organizer_id: event.organizer,
+    booking_dateTime: bookingTime,
+    seats: seatList.join(','),
+    ticket_qr: qrCode,
+    payment_id: payment.razorpay_payment_id,
+    paymentAmt: payment.amount,
+  });
+
+  await User.updateOne({ _id: user_id }, { $addToSet: { eventsAttended: event_id } });
+  await SeatLock.deleteMany({ event_id, seatLabel: { $in: seatList } });
+
+  const io = getIO();
+  if (io) {
+    io.to(`event-${event_id}`).emit('seats-booked', {
+      seats: seatList,
+      timestamp: new Date(),
+    });
+  }
+
+  res.status(201).json({
+    success: true,
+    message: 'Booking successful!',
+    booking,
+  });
+
+  // Send the confirmation email after responding; a mail failure must not
+  // fail a booking that has already been paid for.
+  try {
+    const base64Data = booking.ticket_qr.split(',')[1];
+    const htmlContent = confirmationFormat(
+      event.title,
+      booking.booking_dateTime,
+      booking.seats,
+      req.user.email,
+      booking.ticket_qr,
+      booking.payment_id,
+      booking.paymentAmt
+    );
+    await mail({
+      to: req.user.email,
+      subject: 'Confirmation of Ticket',
+      html: htmlContent.replace(
+        '{{TICKET_QR}}',
+        '<img src="cid:ticketqr" alt="Ticket QR" style="width: 200px;" />'
+      ),
+      attachments: [
+        { filename: 'ticketqr.png', content: base64Data, encoding: 'base64', cid: 'ticketqr' },
+      ],
+    });
+  } catch (emailError) {
+    console.error('Error sending confirmation email:', emailError.message);
   }
 });
 
@@ -735,17 +699,17 @@ const getSeatLocks = asyncHandler(async (req, res) => {
   const locks = await SeatLock.find({
     event_id: eventId,
     expiresAt: { $gt: new Date() }
-  }).populate('user_id', 'name email').select('seatLabel user_id lockedAt expiresAt');
+  }).populate('user_id', 'username').select('seatLabel user_id lockedAt expiresAt');
 
   res.status(200).json({
     success: true,
     locks: locks.map(lock => ({
       seatLabel: lock.seatLabel,
-      userId: lock.user_id._id,
-      userName: lock.user_id.name,
+      userId: lock.user_id?._id,
+      userName: lock.user_id?.username,
       lockedAt: lock.lockedAt,
       expiresAt: lock.expiresAt,
-      isCurrentUser: lock.user_id._id.toString() === currentUserId.toString()
+      isCurrentUser: lock.user_id?._id?.toString() === currentUserId.toString()
     })),
     currentUserId,
     message: 'Active seat locks fetched successfully'

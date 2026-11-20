@@ -4,7 +4,7 @@ import { checkDatabaseConnection } from "../utils/dbStatus.js";
 import { connectDB } from "../utils/connectDB.js";
 
 // Load environment variables before tests
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const databaseAvailable = Boolean(process.env.MONGO_URI);
 const describeDatabase = databaseAvailable ? describe : describe.skip;
